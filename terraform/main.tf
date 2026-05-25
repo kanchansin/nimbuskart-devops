@@ -123,7 +123,7 @@ resource "aws_ebs_volume" "orphan" {
 
   # Intentionally missing the Protected tag so the Janitor flags it
   tags = merge(local.common_tags, {
-    Name   = "${var.project}-${var.environment}-orphan-vol"
-    Note   = "intentional-orphan-for-janitor-testing"
+    Name = "${var.project}-${var.environment}-orphan-vol"
+    Note = "intentional-orphan-for-janitor-testing"
   })
 }
