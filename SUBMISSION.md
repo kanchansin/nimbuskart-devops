@@ -1,9 +1,9 @@
 # Submission — DevOps Engineer Assignment
 
-**Candidate name:** [Kanchan Singh]
-**Email:** [kanchan.matulsi@gmail.com]
-**Date submitted:** [2026-05-25]
-**Hours spent (approximate):** 8
+**Candidate name:** Kanchan Singh
+**Email:** kanchan.matulsi@gmail.com
+**Date submitted:** 2026-05-25
+**Hours spent (approximate):** 6
 
 ## Deliverables checklist
 
