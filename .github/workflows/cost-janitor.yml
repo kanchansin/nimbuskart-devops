@@ -1,0 +1,191 @@
+name: Cost Janitor — PR Scan
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+  workflow_dispatch:  # allow manual runs
+
+permissions:
+  contents: read
+  pull-requests: write  # needed to post PR comments
+
+jobs:
+  cost-janitor:
+    name: Provision infra & scan for orphans
+    runs-on: ubuntu-latest
+
+    services:
+      localstack:
+        image: localstack/localstack:latest
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: ec2,s3,iam,sts
+          DEFAULT_REGION: us-east-1
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+        options: >-
+          --health-cmd "curl -sf http://localhost:4566/_localstack/health | grep -q '\"ec2\": \"available\"'"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 15
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Checkout
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # 2. Set up Terraform
+      # -----------------------------------------------------------------------
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
+
+      # -----------------------------------------------------------------------
+      # 3. Install tflocal (LocalStack Terraform wrapper)
+      # -----------------------------------------------------------------------
+      - name: Install tflocal
+        run: pip install terraform-local
+
+      # -----------------------------------------------------------------------
+      # 4. Validate & format-check Terraform (fail fast before applying)
+      # -----------------------------------------------------------------------
+      - name: Terraform fmt check
+        working-directory: terraform
+        run: terraform fmt -check -recursive
+        env:
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+
+      - name: Terraform init
+        working-directory: terraform
+        run: tflocal init
+        env:
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+
+      - name: Terraform validate
+        working-directory: terraform
+        run: tflocal validate
+        env:
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+
+      # -----------------------------------------------------------------------
+      # 5. Apply Terraform against LocalStack
+      #    This creates the NimbusKart staging infra including the orphan EBS
+      # -----------------------------------------------------------------------
+      - name: Terraform apply
+        working-directory: terraform
+        run: tflocal apply -auto-approve
+        env:
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+          LOCALSTACK_HOSTNAME: localhost
+
+      # -----------------------------------------------------------------------
+      # 6. Set up Python for the Janitor
+      # -----------------------------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: janitor/requirements.txt
+
+      - name: Install Janitor dependencies
+        run: pip install -r janitor/requirements.txt
+
+      # -----------------------------------------------------------------------
+      # 7. Run unit tests (moto-based, no LocalStack needed)
+      # -----------------------------------------------------------------------
+      - name: Install test dependencies
+        run: pip install pytest moto[ec2,s3,sts]
+
+      - name: Run unit tests
+        working-directory: janitor
+        run: pytest tests/ -v --tb=short
+
+      # -----------------------------------------------------------------------
+      # 8. Run Cost Janitor in --dry-run mode against LocalStack
+      #    We expect it to find the orphan EBS volume and exit 1
+      # -----------------------------------------------------------------------
+      - name: Run Cost Janitor (dry-run)
+        id: janitor
+        working-directory: janitor
+        run: |
+          python janitor.py \
+            --dry-run \
+            --endpoint-url http://localhost:4566 \
+            --region us-east-1 \
+            --output-dir ./output
+        env:
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+        # Exit 1 is EXPECTED when orphans are found — capture it, don't fail the step
+        continue-on-error: true
+
+      # -----------------------------------------------------------------------
+      # 9. Upload report artifacts
+      # -----------------------------------------------------------------------
+      - name: Upload cost report artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cost-janitor-report
+          path: |
+            janitor/output/report.json
+            janitor/output/report.md
+          retention-days: 30
+
+      # -----------------------------------------------------------------------
+      # 10. Post PR comment if orphans were found
+      # -----------------------------------------------------------------------
+      - name: Read Markdown report
+        id: read_report
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ -f janitor/output/report.md ]; then
+            # GitHub has a 65535-char limit on PR comments; truncate if needed
+            REPORT=$(head -c 60000 janitor/output/report.md)
+            echo "REPORT_CONTENT<<EOF" >> $GITHUB_OUTPUT
+            echo "$REPORT" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request' && steps.janitor.outcome == 'failure'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: cost-janitor
+          message: |
+            ## 🧹 Cost Janitor found orphaned resources
+
+            ${{ steps.read_report.outputs.REPORT_CONTENT }}
+
+            ---
+            > Run `python janitor/janitor.py --delete` locally to clean up safe orphans.
+            > Resources tagged `Protected=true` will never be auto-deleted.
+
+      # -----------------------------------------------------------------------
+      # 11. Fail the workflow if orphans were found
+      #     (step 8 ran with continue-on-error; we re-raise here so the
+      #      PR stays red but we still got artifacts and a comment)
+      # -----------------------------------------------------------------------
+      - name: Fail if orphans found
+        if: steps.janitor.outcome == 'failure'
+        run: |
+          echo "::error::Cost Janitor found orphaned resources. Review the uploaded report."
+          exit 1

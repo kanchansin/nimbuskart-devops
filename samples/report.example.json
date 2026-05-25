@@ -1,0 +1,53 @@
+{
+  "scan_timestamp": "2026-05-21T23:55:01Z",
+  "account_id": "000000000000",
+  "region": "us-east-1",
+  "summary": {
+    "total_orphans": 3,
+    "estimated_monthly_waste_usd": 15.25
+  },
+  "findings": [
+    {
+      "resource_id": "vol-51ca07efccb16afa9",
+      "resource_type": "ebs_volume",
+      "reason": "unattached",
+      "age_days": 0,
+      "estimated_monthly_cost_usd": 1.6,
+      "tags": {
+        "Environment": "staging",
+        "Project": "nimbuskart",
+        "Owner": "platform-team"
+      },
+      "suggested_action": "delete",
+      "safe_to_auto_delete": true
+    },
+    {
+      "resource_id": "vol-c7f6bd589fafccefd",
+      "resource_type": "ebs_volume",
+      "reason": "unattached; missing_tags:Environment,Project,Owner",
+      "age_days": 0,
+      "estimated_monthly_cost_usd": 10.0,
+      "tags": {
+        "Environment": null,
+        "Project": null,
+        "Owner": null
+      },
+      "suggested_action": "delete",
+      "safe_to_auto_delete": false
+    },
+    {
+      "resource_id": "eipalloc-a577bed5910cb7574",
+      "resource_type": "elastic_ip",
+      "reason": "unassociated; missing_tags:Environment,Project,Owner",
+      "age_days": null,
+      "estimated_monthly_cost_usd": 3.65,
+      "tags": {
+        "Environment": null,
+        "Project": null,
+        "Owner": null
+      },
+      "suggested_action": "release",
+      "safe_to_auto_delete": false
+    }
+  ]
+}
